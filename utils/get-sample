@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# get-sample - receive single mqtt message and print it or copy to clipboard
+#
+# Bez pipefail celowo: przy filtrowaniu po tagu `rg -m1` kończy strumień,
+# a mosquitto_sub dostaje wtedy SIGPIPE (exit 141) — to normalne, nie błąd.
+set -eu
+
+BROKER="192.168.2.145"
+TOPIC="engine/+/positions"
+COPY=0
+VERBOSE=0
+PRETTY=0
+TAG=""
+TIMEOUT=""
+
+usage() {
+  cat <<'EOF'
+get-sample - odbierz pojedynczy pakiet MQTT (engine/+/positions) i wyświetl.
+
+Użycie: get-sample [opcje]
+
+Opcje:
+  -c            kopiuj wynik do schowka (xclip) zamiast na stdout
+  -t TAG        czekaj na pierwszą wiadomość konkretnego taga (tag.id)
+  -b HOST       adres brokera (domyślnie 192.168.2.145)
+  -w SEKUNDY    timeout — przerwij, jeśli nic nie przyjdzie
+  -v            dołącz topic do wyniku (mosquitto_sub -v)
+  -j            sformatuj JSON przez jq (ładny podgląd)
+  -h            pomoc
+
+Przykłady:
+  ./get-sample                 # jeden pakiet na stdout
+  ./get-sample -c              # jeden pakiet do schowka
+  ./get-sample -t 45306        # pierwszy pakiet taga 45306 (payload)
+  ./get-sample -j              # ładnie sformatowany JSON
+  ./get-sample -t 45306 -c     # tag 45306 prosto do schowka
+EOF
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "Brakuje narzędzia: $1" >&2; exit 1; }; }
+
+while getopts "ct:b:w:vjh" opt; do
+  case "$opt" in
+    c) COPY=1 ;;
+    t) TAG="$OPTARG" ;;
+    b) BROKER="$OPTARG" ;;
+    w) TIMEOUT="$OPTARG" ;;
+    v) VERBOSE=1 ;;
+    j) PRETTY=1 ;;
+    h) usage; exit 0 ;;
+    *) usage; exit 1 ;;
+  esac
+done
+
+need mosquitto_sub
+(( COPY )) && need xclip
+(( PRETTY )) && need jq
+[[ -n "$TAG" ]] && need rg
+
+# Wspólne argumenty subskrypcji
+sub_args=(-h "$BROKER" -t "$TOPIC")
+[[ -n "$TIMEOUT" ]] && sub_args+=(-W "$TIMEOUT")
+
+# Odbiór jednej wiadomości
+if [[ -n "$TAG" ]]; then
+  # strumień do pierwszego trafienia po tag.id (payload, bez topiku — czyściej do parsowania)
+  msg=$(mosquitto_sub "${sub_args[@]}" | rg -m1 "\"id\":\"$TAG\"") || true
+else
+  extra=()
+  # -v doklejamy tylko, gdy NIE formatujemy jq (jq nie strawi "topic payload")
+  (( VERBOSE && ! PRETTY )) && extra+=(-v)
+  msg=$(mosquitto_sub "${sub_args[@]}" -C 1 "${extra[@]}") || true
+fi
+
+if [[ -z "$msg" ]]; then
+  echo "Brak wiadomości (timeout lub brak danych na topicu)." >&2
+  exit 1
+fi
+
+(( PRETTY )) && msg=$(printf '%s' "$msg" | jq .)
+
+if (( COPY )); then
+  printf '%s' "$msg" | xclip -selection clipboard
+  echo "Skopiowano do schowka." >&2
+else
+  printf '%s\n' "$msg"
+fi
