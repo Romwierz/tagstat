@@ -1,6 +1,7 @@
 ### Installation
 
 ```
+git clone git@github.com:Romwierz/tagstat.git && cd tagstat
 python3 -m venv .env && . .env/bin/activate
 pip install -r requirements.txt
 ```
@@ -8,7 +9,7 @@ pip install -r requirements.txt
 ### Usage
 
 ```
-# Run:  
+# Run (default host is 192.168.2.145) 
 python -m tagstat <host>
 
 # List ids of available tags
